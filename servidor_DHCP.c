@@ -13,7 +13,7 @@
 #define DEFAULT_GATEWAY "192.168.1.1"
 #define DNS_SERVER "8.8.8.8"
 #define DOMAIN_NAME "example.local"
-#define LEASE_TIME 3600      // Tiempo de concesión (lease)
+#define LEASE_TIME 120     // Tiempo de concesión (lease)
 
 typedef struct {
     int message_type;
@@ -25,6 +25,7 @@ typedef struct {
 typedef struct {
     unsigned int ip_addr;
     int is_assigned;
+    time_t lease_expiration; //campo para constrolar la expiracion del lease
 } ip_entry;
 
 ip_entry *ip_pool;
@@ -60,9 +61,12 @@ void init_ip_pool(const char *ip_start, const char *ip_end) {
 }
 
 int assign_ip_dynamic(char *assigned_ip) {
+    time_t current_time = time(NULL); 
+
     for (int i = 0; i < pool_size; i++) {
         if (!ip_pool[i].is_assigned) {
             ip_pool[i].is_assigned = 1;
+            ip_pool[i].lease_expiration = current_time + LEASE_TIME;
             int_to_ip(ip_pool[i].ip_addr, assigned_ip);
             return 0;
         }
@@ -77,6 +81,19 @@ void release_ip_dynamic(const char *ip_str) {
             ip_pool[i].is_assigned = 0;
             printf("IP %s liberada\n", ip_str);
             break;
+        }
+    }
+}
+
+void check_ip_leases() {
+    time_t current_time = time(NULL);  // Obtener el tiempo actual
+    char ip_str[INET_ADDRSTRLEN];
+
+    for (int i = 0; i < pool_size; i++) {
+        if (ip_pool[i].is_assigned && ip_pool[i].lease_expiration <= current_time) {
+            int_to_ip(ip_pool[i].ip_addr, ip_str);
+            printf("El tiempo de concesión de la IP %s ha expirado, liberando...\n", ip_str);
+            ip_pool[i].is_assigned = 0;
         }
     }
 }
@@ -216,6 +233,9 @@ int main(int argc, char *argv[]) {
             break;
         }
 
+        // Verificar si alguna IP ha expirado
+        check_ip_leases();
+
         if (FD_ISSET(sockfd, &readfds)) {
             dhcp_message msg;
             memset(&msg, 0, sizeof(msg));
@@ -235,3 +255,4 @@ int main(int argc, char *argv[]) {
     free(ip_pool);
     return 0;
 }
+

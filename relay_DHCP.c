@@ -6,11 +6,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define RELAY_PORT 67          // Puerto donde escucha el relay (puede ser 67 para que reciba solicitudes del cliente)
+#define RELAY_PORT 1067          // Puerto donde escucha el relay (puede ser 67 para que reciba solicitudes del cliente)
 #define SERVER_PORT 67      // Puerto donde escucha el servidor DHCP
 #define CLIENT_PORT 68          // Puerto donde escucha el cliente DHCP
 #define SERVER_IP "127.0.0.1"   // IP del servidor (usando localhost para pruebas)
-#define RELAY_IP "127.0.0.1"    // IP del relay (localhost para pruebas)
+#define RELAY_IP "127.0.0.1"   // IP del relay (localhost para pruebas)
 
 typedef struct {
     int message_type;

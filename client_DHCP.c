@@ -6,7 +6,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define SERVER_PORT 67           // Puerto donde escucha el servidor DHCP
+#define SERVER_PORT 1067           // Puerto donde escucha el servidor DHCP
 #define CLIENT_PORT 68           // Puerto donde escucha el cliente DHCP
 #define SERVER_IP "127.0.0.1"    // IP del servidor (usando localhost para pruebas)
 
