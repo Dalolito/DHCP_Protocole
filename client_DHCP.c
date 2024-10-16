@@ -5,7 +5,8 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <time.h>  // Agregar para manejar tiempos
+#include <time.h>
+#include <signal.h>  // Para manejar señales como Ctrl + C
 
 #define SERVER_PORT 1067         // Puerto donde escucha el servidor DHCP
 #define CLIENT_PORT 68           // Puerto donde escucha el cliente DHCP
@@ -14,7 +15,7 @@
 
 // Estructura para un mensaje DHCP (simplificada para el ejemplo)
 typedef struct {
-    int message_type;         // Tipo de mensaje (1 = DHCPDISCOVER, 3 = DHCPREQUEST)
+    int message_type;         // Tipo de mensaje (1 = DHCPDISCOVER, 3 = DHCPREQUEST, 5 = DHCPRELEASE)
     char client_mac[18];      // Dirección MAC del cliente (formato: XX:XX:XX:XX:XX:XX)
     char requested_ip[16];    // Dirección IP solicitada por el cliente
     uint8_t options[312];     // Campo para recibir las opciones DHCP
@@ -22,6 +23,34 @@ typedef struct {
 
 uint32_t lease_time = 0;       // Variable para almacenar el lease time recibido
 time_t lease_start_time;       // Marca de tiempo cuando se recibe la IP
+
+int sockfd;                    // Descriptor del socket global para que se pueda usar en la señal
+char assigned_ip[16];          // Para almacenar la IP asignada globalmente
+struct sockaddr_in server_addr; // Estructura para la dirección del servidor
+socklen_t addr_len = sizeof(server_addr); // Tamaño de la estructura del servidor
+
+// Función para enviar DHCPRELEASE al servidor
+void send_dhcp_release() {
+    dhcp_message release_msg;
+    memset(&release_msg, 0, sizeof(release_msg));
+    release_msg.message_type = 5; // 5 = DHCPRELEASE
+    strcpy(release_msg.client_mac, "00:11:22:33:44:55"); // Simulación de la MAC
+    strcpy(release_msg.requested_ip, assigned_ip);       // IP asignada previamente
+
+    printf("Enviando DHCPRELEASE para la IP %s...\n", assigned_ip);
+    if (sendto(sockfd, &release_msg, sizeof(release_msg), 0, (struct sockaddr*)&server_addr, addr_len) < 0) {
+        perror("Error al enviar DHCPRELEASE");
+    } else {
+        printf("DHCPRELEASE enviado para la IP %s\n", assigned_ip);
+    }
+}
+
+// Manejador de señal para liberar la IP cuando el cliente sea interrumpido (Ctrl + C)
+void signal_handler(int signum) {
+    send_dhcp_release();  // Enviar DHCPRELEASE antes de cerrar el cliente
+    close(sockfd);        // Cerrar el socket
+    exit(0);              // Salir del programa
+}
 
 // Función para imprimir las opciones recibidas del servidor
 void print_dhcp_options(dhcp_message *response) {
@@ -120,11 +149,9 @@ int handle_renewal_response(int sockfd, struct sockaddr_in *server_addr, socklen
 }
 
 int main() {
-    int sockfd, renewals = 0;  // Contador de renovaciones
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t addr_len = sizeof(server_addr);
+    int renewals = 0;  // Contador de renovaciones
+    struct sockaddr_in client_addr;
     dhcp_message msg, response;
-    char client_mac[18] = "00:11:22:33:44:55";  // Simulación de la MAC
 
     // Crear el socket UDP
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -151,9 +178,12 @@ int main() {
     server_addr.sin_port = htons(SERVER_PORT);
     inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
 
+    // Manejar la señal para enviar DHCPRELEASE al terminar
+    signal(SIGINT, signal_handler);
+
     // Enviar mensaje DHCPDISCOVER al servidor
     msg.message_type = 1; // 1 = DHCPDISCOVER
-    strcpy(msg.client_mac, client_mac);
+    strcpy(msg.client_mac, "00:11:22:33:44:55"); // Simulación de la MAC
     printf("Enviando DHCPDISCOVER al servidor...\n");
 
     if (sendto(sockfd, &msg, sizeof(msg), 0, (struct sockaddr*)&server_addr, addr_len) < 0) {
@@ -171,6 +201,7 @@ int main() {
 
     printf("Recibido DHCPOFFER: %s\n", response.requested_ip);
     print_dhcp_options(&response);
+    strcpy(assigned_ip, response.requested_ip); // Guardar la IP asignada
 
     // Enviar mensaje DHCPREQUEST para solicitar la IP ofrecida
     msg.message_type = 3; // 3 = DHCPREQUEST
@@ -200,7 +231,7 @@ int main() {
     // Intentar renovar la IP hasta un máximo de 4 veces
     while (renewals < MAX_RENEWALS) {
         sleep(renew_interval); // Simular espera hasta que llegue el tiempo de renovación
-        renew_ip(sockfd, &server_addr, addr_len, client_mac, response.requested_ip);
+        renew_ip(sockfd, &server_addr, addr_len, "00:11:22:33:44:55", response.requested_ip);
 
         int renewal_status = handle_renewal_response(sockfd, &server_addr, addr_len);
         if (renewal_status == 1) {
@@ -220,7 +251,8 @@ int main() {
         printf("Se ha alcanzado el límite de %d renovaciones.\n", MAX_RENEWALS);
     }
 
-    // Cerrar el socket
+    // Cerrar el socket y enviar el DHCPRELEASE
+    send_dhcp_release();
     close(sockfd);
     return 0;
 }

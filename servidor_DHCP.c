@@ -53,6 +53,7 @@ void int_to_ip(unsigned int ip, char *ip_str) {
     inet_ntop(AF_INET, &addr, ip_str, INET_ADDRSTRLEN);
 }
 
+// Inicializa el pool de direcciones IP
 void init_ip_pool(const char *ip_start, const char *ip_end) {
     unsigned int start = ip_to_int(ip_start);
     unsigned int end = ip_to_int(ip_end);
@@ -70,6 +71,7 @@ void init_ip_pool(const char *ip_start, const char *ip_end) {
     }
 }
 
+// Asigna una IP dinámica del pool
 int assign_ip_dynamic(char *assigned_ip) {
     time_t current_time = time(NULL);
 
@@ -84,6 +86,7 @@ int assign_ip_dynamic(char *assigned_ip) {
     return -1;
 }
 
+// Libera una IP en función del mensaje DHCPRELEASE
 void release_ip_dynamic(const char *ip_str) {
     unsigned int ip = ip_to_int(ip_str);
     for (int i = 0; i < pool_size; i++) {
@@ -95,6 +98,7 @@ void release_ip_dynamic(const char *ip_str) {
     }
 }
 
+// Verifica si las concesiones de IP han expirado
 void check_ip_leases() {
     time_t current_time = time(NULL);  // Obtener el tiempo actual
     char ip_str[INET_ADDRSTRLEN];
@@ -108,44 +112,52 @@ void check_ip_leases() {
     }
 }
 
+// Construye las opciones del mensaje DHCP (oferta y ACK)
 void build_dhcp_options(dhcp_message *response, const char* subnet_mask, const char* gateway, const char* dns, const char* domain, int lease_time) {
     uint8_t *options = response->options;
     int offset = 0;
 
-    options[offset++] = 53;
+    options[offset++] = 53; // Código para el tipo de mensaje DHCP
     options[offset++] = 1;
     options[offset++] = response->message_type;
 
+    // Máscara de subred
     options[offset++] = 1;
     options[offset++] = 4;
     inet_pton(AF_INET, subnet_mask, &options[offset]);
     offset += 4;
 
+    // Puerta de enlace
     options[offset++] = 3;
     options[offset++] = 4;
     inet_pton(AF_INET, gateway, &options[offset]);
     offset += 4;
 
+    // Servidor DNS
     options[offset++] = 6;
     options[offset++] = 4;
     inet_pton(AF_INET, dns, &options[offset]);
     offset += 4;
 
+    // Nombre de dominio
     size_t domain_len = strlen(domain);
     options[offset++] = 15;
     options[offset++] = domain_len;
     memcpy(&options[offset], domain, domain_len);
     offset += domain_len;
 
+    // Tiempo de concesión
     options[offset++] = 51;
     options[offset++] = 4;
     lease_time = htonl(lease_time);
     memcpy(&options[offset], &lease_time, 4);
     offset += 4;
 
+    // Fin de las opciones
     options[offset++] = 255;
 }
 
+// Maneja las solicitudes de clientes en hilos separados
 void* handle_client(void* arg) {
     client_data *data = (client_data*) arg;
     dhcp_message *msg = data->msg;
@@ -207,6 +219,7 @@ void* handle_client(void* arg) {
     pthread_exit(NULL);
 }
 
+// Función principal del servidor
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         fprintf(stderr, "Uso: %s <IP de inicio> <IP de fin>\n", argv[0]);
