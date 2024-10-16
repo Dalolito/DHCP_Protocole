@@ -6,17 +6,18 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define RELAY_PORT 1067          // Puerto donde escucha el relay (puede ser 67 para que reciba solicitudes del cliente)
-#define SERVER_PORT 67      // Puerto donde escucha el servidor DHCP
-#define CLIENT_PORT 68          // Puerto donde escucha el cliente DHCP
-#define SERVER_IP "127.0.0.1"   // IP del servidor (usando localhost para pruebas)
-#define RELAY_IP "127.0.0.1"   // IP del relay (localhost para pruebas)
+#define RELAY_PORT 1067           // Puerto donde escucha el relay
+#define SERVER_PORT 67            // Puerto donde escucha el servidor DHCP
+#define CLIENT_PORT 68            // Puerto donde escucha el cliente DHCP
+#define SERVER_IP "127.0.0.1"     // IP del servidor (localhost para pruebas)
+#define RELAY_IP "127.0.0.1"    // IP del relay en la subred del cliente
 
 typedef struct {
     int message_type;
     char client_mac[18];
     char requested_ip[16];
     uint8_t options[312];
+    uint32_t giaddr;             // Agregar el campo giaddr
 } dhcp_message;
 
 int main() {
@@ -34,10 +35,10 @@ int main() {
     // Configurar la dirección del relay para escuchar solicitudes del cliente
     memset(&relay_addr, 0, sizeof(relay_addr));
     relay_addr.sin_family = AF_INET;
-    relay_addr.sin_addr.s_addr = inet_addr(RELAY_IP);
+    relay_addr.sin_addr.s_addr = inet_addr(RELAY_IP); // IP del relay en la subred del cliente
     relay_addr.sin_port = htons(RELAY_PORT);
 
-    // Enlazar el socket del relay al puerto de relay
+    // Enlazar el socket del relay al puerto del relay
     if (bind(sockfd, (struct sockaddr*)&relay_addr, sizeof(relay_addr)) < 0) {
         perror("No se pudo enlazar el socket del relay");
         close(sockfd);
@@ -63,7 +64,10 @@ int main() {
 
         printf("Recibida solicitud DHCP del cliente %s\n", msg.client_mac);
 
-        // Reenviar la solicitud al servidor DHCP, configurando la IP del relay en `giaddr`
+        // Configurar el campo `giaddr` con la IP del relay en la subred del cliente
+        inet_pton(AF_INET, RELAY_IP, &msg.giaddr); // Asignar IP del relay
+
+        // Reenviar la solicitud al servidor DHCP
         printf("Reenviando solicitud al servidor DHCP %s:%d\n", SERVER_IP, SERVER_PORT);
         if (sendto(sockfd, &msg, sizeof(msg), 0, (struct sockaddr*)&server_addr, addr_len) < 0) {
             perror("Error al reenviar mensaje al servidor");

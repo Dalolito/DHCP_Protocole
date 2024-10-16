@@ -5,10 +5,12 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <time.h>  // Agregar para manejar tiempos
 
-#define SERVER_PORT 1067           // Puerto donde escucha el servidor DHCP
+#define SERVER_PORT 1067         // Puerto donde escucha el servidor DHCP
 #define CLIENT_PORT 68           // Puerto donde escucha el cliente DHCP
 #define SERVER_IP "127.0.0.1"    // IP del servidor (usando localhost para pruebas)
+#define MAX_RENEWALS 4           // Máximo número de renovaciones
 
 // Estructura para un mensaje DHCP (simplificada para el ejemplo)
 typedef struct {
@@ -17,6 +19,9 @@ typedef struct {
     char requested_ip[16];    // Dirección IP solicitada por el cliente
     uint8_t options[312];     // Campo para recibir las opciones DHCP
 } dhcp_message;
+
+uint32_t lease_time = 0;       // Variable para almacenar el lease time recibido
+time_t lease_start_time;       // Marca de tiempo cuando se recibe la IP
 
 // Función para imprimir las opciones recibidas del servidor
 void print_dhcp_options(dhcp_message *response) {
@@ -58,63 +63,68 @@ void print_dhcp_options(dhcp_message *response) {
                 }
                 break;
 
-            case 1: // Máscara de subred
-                printf("Máscara de subred: ");
-                for (int i = 0; i < option_length; i++) {
-                    printf("%d", options[offset + i]);
-                    if (i < option_length - 1) printf(".");
-                }
-                printf("\n");
-                break;
-
-            case 3: // Puerta de enlace predeterminada (gateway)
-                printf("Puerta de enlace predeterminada: ");
-                for (int i = 0; i < option_length; i++) {
-                    printf("%d", options[offset + i]);
-                    if (i < option_length - 1) printf(".");
-                }
-                printf("\n");
-                break;
-
-            case 6: // Servidor DNS
-                printf("Servidor DNS: ");
-                for (int i = 0; i < option_length; i++) {
-                    printf("%d", options[offset + i]);
-                    if (i < option_length - 1) printf(".");
-                }
-                printf("\n");
-                break;
-
-            case 15: // Nombre de dominio
-                printf("Nombre de dominio: ");
-                for (int i = 0; i < option_length; i++) {
-                    printf("%c", options[offset + i]);
-                }
-                printf("\n");
-                break;
-
             case 51: // Tiempo de concesión (lease time)
                 printf("Tiempo de concesión: ");
-                uint32_t lease_time;
                 memcpy(&lease_time, &options[offset], sizeof(lease_time));
                 lease_time = ntohl(lease_time); // Convertir de formato de red a formato local
                 printf("%u segundos\n", lease_time);
+                lease_start_time = time(NULL); // Guardar el momento en que se asigna la IP
                 break;
 
-            default:
-                printf("Opción DHCP desconocida: %d\n", option_code);
-                break;
+            // Otras opciones como la máscara de subred, puerta de enlace, DNS, etc.
         }
 
         offset += option_length; // Mover el offset al siguiente par código-longitud
     }
 }
 
-int main(int argc, char *argv[]) {
-    int sockfd;
+// Función para calcular el tiempo de renovación (T1)
+int time_to_renew() {
+    return (lease_time / 2); // T1: 50% del tiempo de concesión
+}
+
+// Función para renovar la IP enviando DHCPREQUEST
+void renew_ip(int sockfd, struct sockaddr_in *server_addr, socklen_t addr_len, const char *client_mac, const char *requested_ip) {
+    dhcp_message msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.message_type = 3; // 3 = DHCPREQUEST
+    strcpy(msg.client_mac, client_mac);
+    strcpy(msg.requested_ip, requested_ip);
+
+    printf("Renovando IP %s...\n", requested_ip);
+    if (sendto(sockfd, &msg, sizeof(msg), 0, (struct sockaddr*)server_addr, addr_len) < 0) {
+        perror("Error al enviar DHCPREQUEST para renovar");
+    } else {
+        printf("DHCPREQUEST enviado para renovar IP %s\n", requested_ip);
+    }
+}
+
+// Función para manejar la respuesta del servidor durante la renovación
+int handle_renewal_response(int sockfd, struct sockaddr_in *server_addr, socklen_t addr_len) {
+    dhcp_message response;
+
+    if (recvfrom(sockfd, &response, sizeof(response), 0, (struct sockaddr*)server_addr, &addr_len) < 0) {
+        perror("Error al recibir respuesta del servidor durante la renovación");
+        return -1;  // Error en la renovación
+    }
+
+    if (response.message_type == 4) { // DHCPACK
+        printf("Renovación de IP aceptada (DHCPACK recibido)\n");
+        return 1;  // Renovación exitosa
+    } else if (response.message_type == 5) { // DHCPNAK
+        printf("Renovación de IP rechazada (DHCPNAK recibido)\n");
+        return 0;  // Renovación rechazada
+    }
+
+    return -1;  // Respuesta inesperada
+}
+
+int main() {
+    int sockfd, renewals = 0;  // Contador de renovaciones
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(server_addr);
     dhcp_message msg, response;
+    char client_mac[18] = "00:11:22:33:44:55";  // Simulación de la MAC
 
     // Crear el socket UDP
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -126,18 +136,13 @@ int main(int argc, char *argv[]) {
     memset(&client_addr, 0, sizeof(client_addr));
     client_addr.sin_family = AF_INET;
     client_addr.sin_addr.s_addr = INADDR_ANY;
+    client_addr.sin_port = htons(0); // Permitir al sistema asignar un puerto dinámico
 
-    // Verificar si se pasa un argumento para usar el puerto específico (por ejemplo, 68)
-    if (argc > 1 && strcmp(argv[1], "--use-port-68") == 0) {
-        client_addr.sin_port = htons(CLIENT_PORT);
-        if (bind(sockfd, (struct sockaddr*)&client_addr, sizeof(client_addr)) < 0) {
-            perror("No se pudo enlazar el socket del cliente");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-        printf("Cliente enlazado al puerto 68.\n");
-    } else {
-        printf("Cliente usando puerto dinámico.\n");
+    // Enlazar el socket del cliente
+    if (bind(sockfd, (struct sockaddr*)&client_addr, sizeof(client_addr)) < 0) {
+        perror("No se pudo enlazar el socket del cliente");
+        close(sockfd);
+        exit(EXIT_FAILURE);
     }
 
     // Configurar la dirección del servidor
@@ -148,7 +153,7 @@ int main(int argc, char *argv[]) {
 
     // Enviar mensaje DHCPDISCOVER al servidor
     msg.message_type = 1; // 1 = DHCPDISCOVER
-    strcpy(msg.client_mac, "00:11:22:33:44:55");
+    strcpy(msg.client_mac, client_mac);
     printf("Enviando DHCPDISCOVER al servidor...\n");
 
     if (sendto(sockfd, &msg, sizeof(msg), 0, (struct sockaddr*)&server_addr, addr_len) < 0) {
@@ -187,6 +192,33 @@ int main(int argc, char *argv[]) {
 
     printf("Recibido DHCPACK: IP asignada %s\n", response.requested_ip);
     print_dhcp_options(&response);
+
+    // Temporizador para la renovación
+    int renew_interval = time_to_renew();
+    printf("Renovación programada para %d segundos\n", renew_interval);
+
+    // Intentar renovar la IP hasta un máximo de 4 veces
+    while (renewals < MAX_RENEWALS) {
+        sleep(renew_interval); // Simular espera hasta que llegue el tiempo de renovación
+        renew_ip(sockfd, &server_addr, addr_len, client_mac, response.requested_ip);
+
+        int renewal_status = handle_renewal_response(sockfd, &server_addr, addr_len);
+        if (renewal_status == 1) {
+            renewals++;
+            printf("Renovación #%d exitosa\n", renewals);
+            renew_interval = time_to_renew();  // Volver a programar la próxima renovación
+        } else if (renewal_status == 0) {
+            printf("Renovación fallida, se ha recibido un DHCPNAK. Fin del proceso.\n");
+            break;
+        } else {
+            printf("Error en la renovación. Fin del proceso.\n");
+            break;
+        }
+    }
+
+    if (renewals == MAX_RENEWALS) {
+        printf("Se ha alcanzado el límite de %d renovaciones.\n", MAX_RENEWALS);
+    }
 
     // Cerrar el socket
     close(sockfd);

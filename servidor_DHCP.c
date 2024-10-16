@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <time.h>
 #include <errno.h>
 
@@ -13,7 +14,8 @@
 #define DEFAULT_GATEWAY "192.168.1.1"
 #define DNS_SERVER "8.8.8.8"
 #define DOMAIN_NAME "example.local"
-#define LEASE_TIME 120     // Tiempo de concesión (lease)
+#define LEASE_TIME 120      // Tiempo de concesión (lease)
+#define MAX_THREADS 5       // Número máximo de hilos activos
 
 typedef struct {
     int message_type;
@@ -25,11 +27,19 @@ typedef struct {
 typedef struct {
     unsigned int ip_addr;
     int is_assigned;
-    time_t lease_expiration; //campo para constrolar la expiracion del lease
+    time_t lease_expiration; // Control de expiración del lease
 } ip_entry;
+
+typedef struct {
+    int sockfd;
+    dhcp_message *msg;
+    struct sockaddr_in client_addr;
+} client_data;
 
 ip_entry *ip_pool;
 int pool_size = 0;
+int active_threads = 0;          // Contador de hilos activos
+pthread_mutex_t lock;            // Mutex para controlar el acceso a los recursos compartidos
 
 unsigned int ip_to_int(const char *ip_str) {
     struct sockaddr_in sa;
@@ -61,7 +71,7 @@ void init_ip_pool(const char *ip_start, const char *ip_end) {
 }
 
 int assign_ip_dynamic(char *assigned_ip) {
-    time_t current_time = time(NULL); 
+    time_t current_time = time(NULL);
 
     for (int i = 0; i < pool_size; i++) {
         if (!ip_pool[i].is_assigned) {
@@ -95,15 +105,6 @@ void check_ip_leases() {
             printf("El tiempo de concesión de la IP %s ha expirado, liberando...\n", ip_str);
             ip_pool[i].is_assigned = 0;
         }
-    }
-}
-
-void print_ip_pool_status() {
-    char ip_str[INET_ADDRSTRLEN];
-    printf("Estado del pool de IPs:\n");
-    for (int i = 0; i < pool_size; i++) {
-        int_to_ip(ip_pool[i].ip_addr, ip_str);
-        printf("IP %s: %s\n", ip_str, ip_pool[i].is_assigned ? "Ocupada" : "Libre");
     }
 }
 
@@ -145,7 +146,12 @@ void build_dhcp_options(dhcp_message *response, const char* subnet_mask, const c
     options[offset++] = 255;
 }
 
-void handle_client_message(int sockfd, struct sockaddr_in *client_addr, dhcp_message *msg) {
+void* handle_client(void* arg) {
+    client_data *data = (client_data*) arg;
+    dhcp_message *msg = data->msg;
+    int sockfd = data->sockfd;
+    struct sockaddr_in client_addr = data->client_addr;
+
     dhcp_message response;
     char assigned_ip[16];
 
@@ -158,20 +164,27 @@ void handle_client_message(int sockfd, struct sockaddr_in *client_addr, dhcp_mes
                 strcpy(response.client_mac, msg->client_mac);
                 strcpy(response.requested_ip, assigned_ip);
                 build_dhcp_options(&response, SUBNET_MASK, DEFAULT_GATEWAY, DNS_SERVER, DOMAIN_NAME, LEASE_TIME);
-                sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr*)client_addr, sizeof(*client_addr));
+                sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
                 printf("Enviado DHCPOFFER de %s a %s\n", assigned_ip, msg->client_mac);
             } else {
                 printf("No hay IPs disponibles para asignar\n");
             }
             break;
 
-        case 3: // DHCPREQUEST
+        case 3: // DHCPREQUEST (para asignación inicial o renovación)
             printf("Recibido DHCPREQUEST de %s para la IP %s\n", msg->client_mac, msg->requested_ip);
+            for (int i = 0; i < pool_size; i++) {
+                if (ip_pool[i].is_assigned && strcmp(msg->requested_ip, inet_ntoa((struct in_addr){htonl(ip_pool[i].ip_addr)})) == 0) {
+                    ip_pool[i].lease_expiration = time(NULL) + LEASE_TIME;
+                    printf("Renovando IP %s para %s\n", msg->requested_ip, msg->client_mac);
+                    break;
+                }
+            }
             response.message_type = 4; // DHCPACK
             strcpy(response.client_mac, msg->client_mac);
             strcpy(response.requested_ip, msg->requested_ip);
             build_dhcp_options(&response, SUBNET_MASK, DEFAULT_GATEWAY, DNS_SERVER, DOMAIN_NAME, LEASE_TIME);
-            sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr*)client_addr, sizeof(*client_addr));
+            sendto(sockfd, &response, sizeof(response), 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
             printf("Enviado DHCPACK para la IP %s a %s\n", msg->requested_ip, msg->client_mac);
             break;
 
@@ -184,6 +197,14 @@ void handle_client_message(int sockfd, struct sockaddr_in *client_addr, dhcp_mes
             printf("Mensaje desconocido recibido\n");
             break;
     }
+
+    pthread_mutex_lock(&lock);
+    active_threads--;
+    pthread_mutex_unlock(&lock);
+
+    free(msg);
+    free(data);
+    pthread_exit(NULL);
 }
 
 int main(int argc, char *argv[]) {
@@ -201,19 +222,21 @@ int main(int argc, char *argv[]) {
     socklen_t addr_len = sizeof(client_addr);
     fd_set readfds;
 
-    // Crear el socket
+    if (pthread_mutex_init(&lock, NULL) != 0) {
+        perror("Mutex init failed");
+        exit(EXIT_FAILURE);
+    }
+
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("No se pudo crear el socket");
         exit(EXIT_FAILURE);
     }
     printf("Socket creado correctamente\n");
 
-    // Configurar dirección del servidor
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
 
-    // Enlazar el socket
     if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("No se pudo enlazar el socket");
         close(sockfd);
@@ -233,26 +256,50 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        // Verificar si alguna IP ha expirado
         check_ip_leases();
 
         if (FD_ISSET(sockfd, &readfds)) {
-            dhcp_message msg;
-            memset(&msg, 0, sizeof(msg));
+            pthread_t thread;
+            client_data *data = malloc(sizeof(client_data));
 
-            if (recvfrom(sockfd, &msg, sizeof(msg), 0, (struct sockaddr*)&client_addr, &addr_len) < 0) {
+            data->msg = malloc(sizeof(dhcp_message));
+            if (recvfrom(sockfd, data->msg, sizeof(dhcp_message), 0, (struct sockaddr*)&client_addr, &addr_len) < 0) {
                 perror("Error al recibir mensaje");
+                free(data->msg);
+                free(data);
                 continue;
             }
 
-            printf("Mensaje recibido desde el cliente\n");
-            handle_client_message(sockfd, &client_addr, &msg);
-            print_ip_pool_status();
+            data->sockfd = sockfd;
+            data->client_addr = client_addr;
+
+            pthread_mutex_lock(&lock);
+            if (active_threads < MAX_THREADS) {
+                active_threads++;
+                pthread_mutex_unlock(&lock);
+
+                if (pthread_create(&thread, NULL, handle_client, (void*)data) != 0) {
+                    perror("Error al crear el hilo");
+                    pthread_mutex_lock(&lock);
+                    active_threads--;
+                    pthread_mutex_unlock(&lock);
+                    free(data->msg);
+                    free(data);
+                } else {
+                    pthread_detach(thread); // No esperar a que el hilo termine
+                }
+            } else {
+                pthread_mutex_unlock(&lock);
+                printf("Máximo número de hilos alcanzado, esperando...\n");
+                free(data->msg);
+                free(data);
+                sleep(1);
+            }
         }
     }
 
     close(sockfd);
+    pthread_mutex_destroy(&lock);
     free(ip_pool);
     return 0;
 }
-
