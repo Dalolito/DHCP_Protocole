@@ -49,3 +49,5 @@ Aspectos no logrados:
 CONCLUSIONES:
 
 REFERENCIAS:
+
+https://www.cisco.com/c/en/us/td/docs/routers/ncs4200/configuration/guide/IP/17-1-1/b-dhcp-17-1-1-ncs4200/b-dhcp-17-1-1-ncs4200_chapter_00.pdf
