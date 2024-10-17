@@ -42,7 +42,7 @@ Aspectos logrados:
 
 Aspectos no logrados:
 
-- No se ha logrado implementar la funcionalidad de comunicación entre subredes usando DHCP relay de manera completa.
+- No se ha logrado implementar la funcionalidad de comunicación entre subredes usando DHCP de manera completa.
 - No se ha logrado implementar la aplicación en un servidor en la nube, y el cliente se ejecutó en la misma subred que el servidor.
 
 CONCLUSIONES:
