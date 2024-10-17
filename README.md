@@ -7,6 +7,7 @@ Este proyecto tiene como objetivo implementar un servidor DHCP en C capaz de asi
 DESARROLLO:
 
 Servidor DHCP
+
 El servidor DHCP está implementado en C y sigue el proceso básico de asignación dinámica de IPs a clientes conectados a la red. El servidor cuenta con un pool de direcciones IP, el cual se inicializa con un rango previamente seleccionado. Estas IPs se asignan dinámicamente a los clientes que lo solicitan. Además, el servidor está diseñado para manejar múltiples clientes simultáneamente, permitiendo atender diversas conexiones en paralelo.
 
 Funcionalidades principales del servidor:
