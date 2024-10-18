@@ -50,4 +50,6 @@ CONCLUSIONES:
 
 REFERENCIAS:
 
+Este proyecto permitió profundizar en el protocolo DHCP y su implementación mediante la API de sockets. Se desarrolló un servidor DHCP robusto, capaz de manejar múltiples clientes y gestionar concesiones de IP de forma eficiente. La implementación del cliente permitió simular el comportamiento real de un dispositivo que solicita configuraciones de red a un servidor.
+
 https://www.cisco.com/c/en/us/td/docs/routers/ncs4200/configuration/guide/IP/17-1-1/b-dhcp-17-1-1-ncs4200/b-dhcp-17-1-1-ncs4200_chapter_00.pdf
